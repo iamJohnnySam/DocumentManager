@@ -34,6 +34,12 @@ public class ProjectMetadata
 
     [JsonPropertyName("snippets")]
     public List<SnippetMetadataEntry> Snippets { get; set; } = [];
+
+    [JsonPropertyName("outerRevisions")]
+    public List<OuterRevisionEntry> OuterRevisions { get; set; } = [];
+
+    [JsonPropertyName("templateName")]
+    public string TemplateName { get; set; } = string.Empty;
 }
 
 /// <summary>
@@ -79,4 +85,16 @@ public class SnippetMetadataEntry
 
     [JsonPropertyName("fileName")]
     public string FileName { get; set; } = string.Empty;
+}
+
+public class OuterRevisionEntry
+{
+    [JsonPropertyName("revisionNumber")]
+    public int RevisionNumber { get; set; }
+
+    [JsonPropertyName("publishDate")]
+    public DateTime PublishDate { get; set; }
+
+    [JsonPropertyName("notes")]
+    public string Notes { get; set; } = string.Empty;
 }

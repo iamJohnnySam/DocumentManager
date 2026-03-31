@@ -39,6 +39,44 @@ public partial class RevisionService
     }
 
     /// <summary>
+    /// Saves content and notes in-place for an existing revision (no new version folder).
+    /// Preserves the original timestamp in the notes header line.
+    /// </summary>
+    public async Task UpdateRevisionInPlaceAsync(string sectionPath, int revisionNumber, string content, string notes)
+    {
+        var folderName = GetRevisionFolderName(revisionNumber);
+        var revisionPath = Path.Combine(sectionPath, folderName);
+
+        var filePath = Path.Combine(revisionPath, "content.tex");
+        await _fileService.WriteFileAsync(filePath, content);
+
+        var notesPath = Path.Combine(revisionPath, "revision_notes.txt");
+        var headerLine = $"Revision {revisionNumber} - {DateTime.UtcNow:yyyy-MM-dd HH:mm}";
+        if (File.Exists(notesPath))
+        {
+            var existing = await _fileService.ReadFileAsync(notesPath);
+            var firstLine = existing.Split('\n').FirstOrDefault();
+            if (!string.IsNullOrEmpty(firstLine) && firstLine.StartsWith("Revision"))
+                headerLine = firstLine;
+        }
+
+        await _fileService.WriteFileAsync(notesPath, $"{headerLine}\n{notes}");
+    }
+
+    /// <summary>
+    /// Reads the user-entered notes (lines after the header) from a revision's notes file.
+    /// </summary>
+    public async Task<string> ReadRevisionUserNotesAsync(string sectionPath, int revisionNumber)
+    {
+        var notesPath = Path.Combine(sectionPath, GetRevisionFolderName(revisionNumber), "revision_notes.txt");
+        if (!File.Exists(notesPath)) return string.Empty;
+
+        var content = await _fileService.ReadFileAsync(notesPath);
+        var lines = content.Split('\n');
+        return lines.Length > 1 ? string.Join("\n", lines.Skip(1)).Trim() : string.Empty;
+    }
+
+    /// <summary>
     /// Reads the content of a specific revision.
     /// </summary>
     public async Task<string> GetRevisionContentAsync(string sectionPath, int revisionNumber)
@@ -60,10 +98,10 @@ public partial class RevisionService
     }
 
     /// <summary>
-    /// Generates the revision_history.tex file aggregating all included section revisions.
-    /// Reads revision notes from the file system since sections are shared.
+    /// Generates the revision_history.tex file from the outer document revision entries.
+    /// Each row shows the publish date, outer revision number, and aggregated notes.
     /// </summary>
-    public async Task<string> GenerateRevisionHistoryAsync(ProjectModel project)
+    public async Task<string> GenerateRevisionHistoryAsync(ProjectModel project, List<OuterRevisionEntry> outerRevisions)
     {
         var lines = new List<string>
         {
@@ -72,32 +110,16 @@ public partial class RevisionService
             $"% Generated: {DateTime.UtcNow:yyyy-MM-dd HH:mm}",
             "",
             "\\section*{Revision History}",
-            "\\begin{tabular}{|l|l|l|p{8cm}|}",
+            "\\begin{tabular}{|l|l|p{10cm}|}",
             "\\hline",
-            "\\textbf{Section} & \\textbf{Rev} & \\textbf{Date} & \\textbf{Notes} \\\\",
+            "\\textbf{Date} & \\textbf{Rev} & \\textbf{Notes} \\\\",
             "\\hline"
         };
 
-        lines.Add($"Main Document & v{project.CurrentRevision:D3} & {project.UpdatedDate:yyyy-MM-dd} & Project revision \\\\");
-        lines.Add("\\hline");
-
-        foreach (var section in project.Sections)
+        foreach (var rev in outerRevisions.OrderBy(r => r.RevisionNumber))
         {
-            // Read notes from each revision folder on disk
-            var revFolders = _fileService.GetRevisionFolders(section.SectionPath);
-            foreach (var revFolder in revFolders.OrderByDescending(f => f))
-            {
-                var revPath = Path.Combine(section.SectionPath, revFolder);
-                var notesPath = Path.Combine(revPath, "revision_notes.txt");
-                var notes = File.Exists(notesPath) ? await _fileService.ReadFileAsync(notesPath) : "";
-                var revNum = int.TryParse(revFolder.AsSpan(1), out var n) ? n : 0;
-
-                // Get folder creation date as a fallback
-                var dateStr = Directory.GetCreationTimeUtc(revPath).ToString("yyyy-MM-dd");
-
-                lines.Add($"{EscapeLatex(section.Name)} & v{revNum:D3} & {dateStr} & {EscapeLatex(notes.Split('\n')[0])} \\\\");
-                lines.Add("\\hline");
-            }
+            lines.Add($"{rev.PublishDate:yyyy-MM-dd} & v{rev.RevisionNumber:D3} & {EscapeLatex(rev.Notes)} \\\\");
+            lines.Add("\\hline");
         }
 
         lines.Add("\\end{tabular}");
@@ -108,6 +130,75 @@ public partial class RevisionService
         await _fileService.WriteFileAsync(historyPath, content);
 
         return content;
+    }
+
+    /// <summary>
+    /// Creates a new outer document revision entry by aggregating section revision notes
+    /// created since the last outer revision. The first outer revision is "Initial Release".
+    /// </summary>
+    public OuterRevisionEntry CreateOuterRevision(ProjectModel project, List<OuterRevisionEntry> existingRevisions)
+    {
+        var lastDate = existingRevisions.Count > 0
+            ? existingRevisions.Max(r => r.PublishDate)
+            : DateTime.MinValue;
+
+        var newRevNum = existingRevisions.Count > 0
+            ? existingRevisions.Max(r => r.RevisionNumber) + 1
+            : 1;
+
+        string notes;
+        if (newRevNum == 1)
+        {
+            notes = "Initial Release";
+        }
+        else
+        {
+            var aggregated = AggregateSectionNotesSince(project, lastDate);
+            notes = string.IsNullOrWhiteSpace(aggregated) ? "Document update" : aggregated;
+        }
+
+        return new OuterRevisionEntry
+        {
+            RevisionNumber = newRevNum,
+            PublishDate = DateTime.UtcNow,
+            Notes = notes
+        };
+    }
+
+    /// <summary>
+    /// Scans section revision folders for revisions created after the given date,
+    /// aggregating their user-entered notes.
+    /// </summary>
+    private string AggregateSectionNotesSince(ProjectModel project, DateTime since)
+    {
+        var parts = new List<string>();
+
+        foreach (var section in project.Sections)
+        {
+            if (!Directory.Exists(section.SectionPath)) continue;
+
+            foreach (var revFolder in _fileService.GetRevisionFolders(section.SectionPath))
+            {
+                var revPath = Path.Combine(section.SectionPath, revFolder);
+                var createdTime = Directory.GetCreationTimeUtc(revPath);
+                if (createdTime <= since) continue;
+
+                var revNum = int.TryParse(revFolder.AsSpan(1), out var n) ? n : 0;
+                var notesPath = Path.Combine(revPath, "revision_notes.txt");
+                if (!File.Exists(notesPath)) continue;
+
+                var notesContent = File.ReadAllText(notesPath);
+                var noteLines = notesContent.Split('\n');
+                var userNote = noteLines.Length > 1
+                    ? string.Join(" ", noteLines.Skip(1)).Trim()
+                    : noteLines[0].Trim();
+
+                if (!string.IsNullOrWhiteSpace(userNote))
+                    parts.Add($"{section.Name} (v{revNum:D3}): {userNote}");
+            }
+        }
+
+        return string.Join(". ", parts);
     }
 
     /// <summary>

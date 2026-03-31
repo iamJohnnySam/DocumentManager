@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.IO;
+using System.Text.RegularExpressions;
 using DocumentManager.Models;
 using DocumentManager.Services;
 
@@ -7,8 +8,9 @@ namespace DocumentManager.ViewModels;
 
 /// <summary>
 /// Builds and manages the project tree view structure.
+/// Automatically detects \input / \include references to build the tree.
 /// </summary>
-public class ProjectTreeViewModel : ViewModelBase
+public partial class ProjectTreeViewModel : ViewModelBase
 {
     private readonly FileService _fileService;
 
@@ -23,8 +25,9 @@ public class ProjectTreeViewModel : ViewModelBase
 
     /// <summary>
     /// Raised when a file node is double-clicked, requesting it to be opened in the editor.
+    /// Parameters: filePath, sectionName, sectionPath, revisionNumber.
     /// </summary>
-    public event Action<string, string, int>? FileOpenRequested;
+    public event Action<string, string, string, int>? FileOpenRequested;
 
     public ProjectTreeViewModel(FileService fileService)
     {
@@ -33,7 +36,7 @@ public class ProjectTreeViewModel : ViewModelBase
 
     /// <summary>
     /// Rebuilds the tree from the given project model.
-    /// Shows the outer document, included shared sections, project images, common images, etc.
+    /// Scans main.tex for \input / \include references to auto-detect referenced sections.
     /// </summary>
     public void LoadProject(ProjectModel project)
     {
@@ -70,65 +73,20 @@ public class ProjectTreeViewModel : ViewModelBase
         }
         root.Children.Add(outerNode);
 
-        // Included Sections (from shared folder)
-        var sectionsNode = new ProjectTreeNode
+        // Referenced Sections (auto-detected from \input / \include in main.tex)
+        var sectionsRoot = Path.Combine(project.CommonRootPath, "sections");
+        var referencedNode = new ProjectTreeNode
         {
-            Name = "Included Sections",
-            FullPath = Path.Combine(project.CommonRootPath, "sections"),
+            Name = "Referenced Sections",
+            FullPath = sectionsRoot,
             NodeType = ProjectTreeNodeType.SectionsFolder
         };
 
-        foreach (var section in project.Sections)
-        {
-            var latestRev = _fileService.GetLatestRevisionNumber(section.SectionPath);
-            var sectionNode = new ProjectTreeNode
-            {
-                Name = $"{section.Name}  [pinned: v{section.CurrentRevision:D3}]",
-                FullPath = section.SectionPath,
-                NodeType = ProjectTreeNodeType.Section,
-                SectionName = section.Name,
-                HasNewerRevision = latestRev > section.CurrentRevision,
-                RevisionNumber = section.CurrentRevision,
-                LatestRevision = latestRev
-            };
+        var mainTexPath = Path.Combine(outerPath, "main.tex");
+        var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        ScanIncludesForSections(referencedNode, mainTexPath, outerPath, sectionsRoot, visited);
 
-            var revFolders = _fileService.GetRevisionFolders(section.SectionPath);
-            foreach (var revFolder in revFolders)
-            {
-                var revPath = Path.Combine(section.SectionPath, revFolder);
-                var revNum = int.TryParse(revFolder.AsSpan(1), out var n) ? n : 0;
-                var revNode = new ProjectTreeNode
-                {
-                    Name = revFolder,
-                    FullPath = revPath,
-                    NodeType = ProjectTreeNodeType.RevisionFolder,
-                    RevisionNumber = revNum,
-                    LatestRevision = latestRev,
-                    HasNewerRevision = revNum < latestRev,
-                    SectionName = section.Name
-                };
-
-                var files = _fileService.GetFilesInDirectory(revPath, "*.tex");
-                foreach (var file in files)
-                {
-                    revNode.Children.Add(new ProjectTreeNode
-                    {
-                        Name = Path.GetFileName(file),
-                        FullPath = file,
-                        NodeType = ProjectTreeNodeType.File,
-                        RevisionNumber = revNum,
-                        LatestRevision = latestRev,
-                        HasNewerRevision = revNum < latestRev,
-                        SectionName = section.Name
-                    });
-                }
-
-                sectionNode.Children.Add(revNode);
-            }
-
-            sectionsNode.Children.Add(sectionNode);
-        }
-        root.Children.Add(sectionsNode);
+        root.Children.Add(referencedNode);
 
         // Project Images (inside project folder)
         root.Children.Add(new ProjectTreeNode
@@ -169,13 +127,102 @@ public class ProjectTreeViewModel : ViewModelBase
     }
 
     /// <summary>
+    /// Recursively scans a LaTeX file for \input / \include commands.
+    /// Section files (under the sections root) are added as child nodes.
+    /// Non-section includes are scanned transparently (their section children bubble up).
+    /// </summary>
+    private void ScanIncludesForSections(
+        ProjectTreeNode parentNode, string filePath, string baseDir,
+        string sectionsRoot, HashSet<string> visited)
+    {
+        if (!File.Exists(filePath) || !visited.Add(Path.GetFullPath(filePath)))
+            return;
+
+        string content;
+        try { content = File.ReadAllText(filePath); }
+        catch { return; }
+
+        foreach (Match match in IncludeRegex().Matches(content))
+        {
+            var refPath = match.Groups[1].Value;
+            var resolvedPath = ResolveTexPath(refPath, baseDir);
+            if (resolvedPath is null) continue;
+
+            var sectionInfo = ExtractSectionInfo(resolvedPath, sectionsRoot);
+            if (sectionInfo is not null)
+            {
+                var (sectionName, sectionPath, revNum) = sectionInfo.Value;
+                var latestRev = _fileService.GetLatestRevisionNumber(sectionPath);
+
+                var sectionNode = new ProjectTreeNode
+                {
+                    Name = $"{sectionName} (v{revNum:D3})",
+                    FullPath = resolvedPath,
+                    NodeType = ProjectTreeNodeType.IncludedFile,
+                    SectionName = sectionName,
+                    SectionPath = sectionPath,
+                    RevisionNumber = revNum,
+                    LatestRevision = latestRev,
+                    HasNewerRevision = latestRev > revNum
+                };
+
+                var childDir = Path.GetDirectoryName(resolvedPath) ?? baseDir;
+                ScanIncludesForSections(sectionNode, resolvedPath, childDir, sectionsRoot, visited);
+                parentNode.Children.Add(sectionNode);
+            }
+            else
+            {
+                // Non-section file: scan through it but add its section children to our parent
+                var childDir = Path.GetDirectoryName(resolvedPath) ?? baseDir;
+                ScanIncludesForSections(parentNode, resolvedPath, childDir, sectionsRoot, visited);
+            }
+        }
+    }
+
+    private static string? ResolveTexPath(string reference, string baseDir)
+    {
+        var path = Path.GetFullPath(Path.Combine(baseDir, reference));
+        if (File.Exists(path)) return path;
+        if (File.Exists(path + ".tex")) return path + ".tex";
+        return null;
+    }
+
+    private static (string SectionName, string SectionPath, int RevNum)? ExtractSectionInfo(
+        string filePath, string sectionsRoot)
+    {
+        var normalized = Path.GetFullPath(filePath);
+        var normalizedRoot = Path.GetFullPath(sectionsRoot);
+        if (!normalizedRoot.EndsWith(Path.DirectorySeparatorChar))
+            normalizedRoot += Path.DirectorySeparatorChar;
+
+        if (!normalized.StartsWith(normalizedRoot, StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        var relative = Path.GetRelativePath(normalizedRoot, normalized);
+        var parts = relative.Split(Path.DirectorySeparatorChar);
+        if (parts.Length < 2) return null;
+
+        var sectionName = parts[0];
+        var sectionPath = Path.Combine(sectionsRoot, sectionName);
+        var revNum = 0;
+
+        if (parts[1].StartsWith('v') && int.TryParse(parts[1].AsSpan(1), out var n))
+            revNum = n;
+
+        return (sectionName, sectionPath, revNum);
+    }
+
+    /// <summary>
     /// Triggers the FileOpenRequested event for the given node.
     /// </summary>
     public void RequestOpenFile(ProjectTreeNode node)
     {
-        if (node.NodeType == ProjectTreeNodeType.File)
+        if (node.NodeType is ProjectTreeNodeType.File or ProjectTreeNodeType.IncludedFile)
         {
-            FileOpenRequested?.Invoke(node.FullPath, node.SectionName, node.RevisionNumber);
+            FileOpenRequested?.Invoke(node.FullPath, node.SectionName, node.SectionPath, node.RevisionNumber);
         }
     }
+
+    [GeneratedRegex(@"\\(?:input|include)\{([^}]+)\}")]
+    private static partial Regex IncludeRegex();
 }

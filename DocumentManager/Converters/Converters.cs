@@ -56,6 +56,7 @@ public class NodeTypeToIconConverter : IValueConverter
             Models.ProjectTreeNodeType.SectionsFolder => "📂",
             Models.ProjectTreeNodeType.SharedSectionsFolder => "📂",
             Models.ProjectTreeNodeType.Section => "📑",
+            Models.ProjectTreeNodeType.IncludedFile => "📑",
             Models.ProjectTreeNodeType.RevisionFolder => "🔖",
             Models.ProjectTreeNodeType.File => "📄",
             Models.ProjectTreeNodeType.ImagesFolder => "🖼️",

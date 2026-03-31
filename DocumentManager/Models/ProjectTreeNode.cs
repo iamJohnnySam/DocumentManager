@@ -14,6 +14,7 @@ public class ProjectTreeNode
     public int RevisionNumber { get; set; }
     public int LatestRevision { get; set; }
     public string SectionName { get; set; } = string.Empty;
+    public string SectionPath { get; set; } = string.Empty;
     public ObservableCollection<ProjectTreeNode> Children { get; set; } = [];
 }
 
@@ -28,6 +29,7 @@ public enum ProjectTreeNodeType
     ImagesFolder,
     TemplatesFolder,
     SnippetsFolder,
+    IncludedFile,
     SharedSectionsFolder,
     CommonImagesFolder,
     ProjectImagesFolder

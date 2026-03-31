@@ -11,6 +11,7 @@ public class EditorTabViewModel : ViewModelBase
     private bool _isDirty;
     private bool _hasNewerRevision;
     private string _sectionName = string.Empty;
+    private string _sectionPath = string.Empty;
     private int _revisionNumber;
     private string _lineNumbers = "1";
 
@@ -61,6 +62,12 @@ public class EditorTabViewModel : ViewModelBase
     {
         get => _sectionName;
         set => SetProperty(ref _sectionName, value);
+    }
+
+    public string SectionPath
+    {
+        get => _sectionPath;
+        set => SetProperty(ref _sectionPath, value);
     }
 
     public int RevisionNumber

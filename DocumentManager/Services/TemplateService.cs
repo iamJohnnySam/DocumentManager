@@ -45,6 +45,42 @@ public class TemplateService
 ";
     }
 
+    /// <summary>
+    /// Returns available outer document templates from the common root templates folder.
+    /// </summary>
+    public List<string> GetAvailableOuterTemplates(string commonRoot)
+    {
+        var dir = Path.Combine(commonRoot, "templates");
+        if (!Directory.Exists(dir))
+            return [];
+
+        return Directory.GetFiles(dir, "*.tex")
+            .Select(Path.GetFileNameWithoutExtension)
+            .Where(n => n is not null)
+            .Cast<string>()
+            .ToList();
+    }
+
+    /// <summary>
+    /// Loads a template from the common root templates folder.
+    /// </summary>
+    public async Task<string> LoadOuterTemplateAsync(string commonRoot, string templateName)
+    {
+        var path = Path.Combine(commonRoot, "templates", $"{templateName}.tex");
+        return File.Exists(path) ? await _fileService.ReadFileAsync(path) : string.Empty;
+    }
+
+    /// <summary>
+    /// Saves content as a named template in the common root templates folder.
+    /// </summary>
+    public async Task SaveOuterTemplateAsync(string commonRoot, string templateName, string content)
+    {
+        var dir = Path.Combine(commonRoot, "templates");
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, $"{templateName}.tex");
+        await _fileService.WriteFileAsync(path, content);
+    }
+
     public List<string> GetAvailableTemplates(string projectRoot)
     {
         var templatesDir = Path.Combine(projectRoot, "templates");

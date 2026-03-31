@@ -68,6 +68,7 @@ public class FileService
         Directory.CreateDirectory(Path.Combine(commonRoot, "sections"));
         Directory.CreateDirectory(Path.Combine(commonRoot, "images"));
         Directory.CreateDirectory(Path.Combine(commonRoot, "projects"));
+        Directory.CreateDirectory(Path.Combine(commonRoot, "templates"));
     }
 
     /// <summary>

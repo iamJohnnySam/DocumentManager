@@ -6,6 +6,7 @@
         xmlns:local="clr-namespace:DocumentManager"
         xmlns:conv="clr-namespace:DocumentManager.Converters"
         xmlns:models="clr-namespace:DocumentManager.Models"
+        xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
         mc:Ignorable="d"
         Title="{Binding WindowTitle}"
         Height="768" Width="1280"
@@ -38,9 +39,9 @@
             <MenuItem Header="_Edit">
                 <MenuItem Header="Add _Section..." Command="{Binding AddSectionCommand}"/>
                 <MenuItem Header="Browse Available _Files..." Command="{Binding BrowseAvailableFilesCommand}"/>
-                <MenuItem Header="New _Revision..." Command="{Binding NewRevisionCommand}"/>
                 <Separator/>
                 <MenuItem Header="Save _Snippet..." Command="{Binding SaveSnippetCommand}"/>
+                <MenuItem Header="Save as _Template..." Command="{Binding SaveAsTemplateCommand}"/>
             </MenuItem>
             <MenuItem Header="_Build">
                 <MenuItem Header="_Compile" Command="{Binding CompileCommand}" InputGestureText="F5"/>
@@ -53,6 +54,10 @@
             <MenuItem Header="_Tools">
                 <MenuItem Header="_Refresh Tree" Command="{Binding RefreshTreeCommand}"/>
                 <MenuItem Header="Check _Notifications" Command="{Binding CheckNotificationsCommand}"/>
+            </MenuItem>
+            <MenuItem Header="_Help">
+                <MenuItem Header="_About LDMS" Command="{Binding ShowAboutCommand}"/>
+                <MenuItem Header="_Source Code (GitHub)" Command="{Binding OpenGitHubCommand}"/>
             </MenuItem>
         </Menu>
 
@@ -93,10 +98,15 @@
             <GridSplitter Grid.Column="1" Width="4" HorizontalAlignment="Center"
                           VerticalAlignment="Stretch" Background="LightGray"/>
 
-            <!-- ===== CENTER: Tabbed Editor ===== -->
-            <DockPanel Grid.Column="2" Margin="4">
+            <!-- ===== CENTER: Tabbed Editor + PDF Preview ===== -->
+            <Grid Grid.Column="2" Margin="4">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+
                 <!-- Compiler Selection Bar -->
-                <DockPanel DockPanel.Dock="Top" Margin="0,0,0,4">
+                <DockPanel Grid.Row="0" Margin="0,0,0,4">
                     <TextBlock Text="Compiler:" VerticalAlignment="Center" Margin="0,0,4,0"/>
                     <ComboBox ItemsSource="{Binding AvailableCompilers}"
                               SelectedItem="{Binding SelectedCompiler}"
@@ -105,10 +115,12 @@
                             Padding="8,2" Margin="0,0,8,0"/>
                     <Button Content="+ Section" Command="{Binding AddSectionCommand}"
                             Padding="8,2" Margin="0,0,8,0"/>
-                    <Button Content="📂 Include Files" Command="{Binding BrowseAvailableFilesCommand}"
+                    <Button Content="📂 Manage Sections" Command="{Binding BrowseAvailableFilesCommand}"
                             Padding="8,2" Margin="0,0,8,0"/>
-                    <Button Content="+ Revision" Command="{Binding NewRevisionCommand}"
-                            Padding="8,2"/>
+                    <ToggleButton x:Name="PdfToggleButton" Content="📄 PDF Preview"
+                                  Padding="8,2" Margin="0,0,8,0"
+                                  IsChecked="{Binding IsPdfPreviewVisible, Mode=OneWay}"
+                                  Click="PdfToggle_Click"/>
                     <!-- Notifications -->
                     <ItemsControl ItemsSource="{Binding Notifications}" DockPanel.Dock="Right"
                                   HorizontalAlignment="Right" Margin="8,0,0,0">
@@ -126,55 +138,83 @@
                     </ItemsControl>
                 </DockPanel>
 
-                <!-- Tab Editor -->
-                <TabControl ItemsSource="{Binding Editor.OpenTabs}"
-                            SelectedItem="{Binding Editor.SelectedTab}">
-                    <TabControl.ItemTemplate>
-                        <DataTemplate>
-                            <StackPanel Orientation="Horizontal">
-                                <TextBlock Text="{Binding DisplayTitle}" Margin="0,0,6,0"/>
-                                <Button Content="✕" FontSize="10" Padding="2,0"
-                                        Command="{Binding DataContext.Editor.CloseTabCommand,
-                                            RelativeSource={RelativeSource AncestorType=Window}}"
-                                        CommandParameter="{Binding}"
-                                        Background="Transparent" BorderThickness="0"
-                                        Cursor="Hand"/>
-                            </StackPanel>
-                        </DataTemplate>
-                    </TabControl.ItemTemplate>
-                    <TabControl.ContentTemplate>
-                        <DataTemplate>
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="*"/>
-                                </Grid.ColumnDefinitions>
-                                <!-- Line Numbers -->
-                                <TextBox Grid.Column="0" Text="{Binding LineNumbers, Mode=OneWay}"
-                                         IsReadOnly="True" Background="#F0F0F0" Foreground="Gray"
-                                         FontFamily="Consolas" FontSize="13"
-                                         BorderThickness="0,0,1,0" BorderBrush="LightGray"
-                                         TextAlignment="Right" Padding="4,4,8,4"
-                                         VerticalScrollBarVisibility="Hidden"
-                                         HorizontalScrollBarVisibility="Hidden"
-                                         IsTabStop="False"
-                                         ScrollViewer.CanContentScroll="True"
-                                         x:Name="LineNumberBox"/>
-                                <!-- Editor TextBox -->
-                                <TextBox Grid.Column="1"
-                                         Text="{Binding Content, UpdateSourceTrigger=PropertyChanged}"
-                                         AcceptsReturn="True" AcceptsTab="True"
-                                         TextWrapping="NoWrap"
-                                         VerticalScrollBarVisibility="Auto"
-                                         HorizontalScrollBarVisibility="Auto"
-                                         FontFamily="Consolas" FontSize="13"
-                                         Padding="4" BorderThickness="0"
-                                         SpellCheck.IsEnabled="False"/>
-                            </Grid>
-                        </DataTemplate>
-                    </TabControl.ContentTemplate>
-                </TabControl>
-            </DockPanel>
+                <!-- Editor + PDF side by side -->
+                <Grid Grid.Row="1">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition x:Name="PdfPreviewColumn" Width="0"/>
+                    </Grid.ColumnDefinitions>
+
+                    <!-- Tab Editor -->
+                    <TabControl Grid.Column="0"
+                                ItemsSource="{Binding Editor.OpenTabs}"
+                                SelectedItem="{Binding Editor.SelectedTab}">
+                        <TabControl.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="{Binding DisplayTitle}" Margin="0,0,6,0"/>
+                                    <Button Content="✕" FontSize="10" Padding="2,0"
+                                            Command="{Binding DataContext.Editor.CloseTabCommand,
+                                                RelativeSource={RelativeSource AncestorType=Window}}"
+                                            CommandParameter="{Binding}"
+                                            Background="Transparent" BorderThickness="0"
+                                            Cursor="Hand"/>
+                                </StackPanel>
+                            </DataTemplate>
+                        </TabControl.ItemTemplate>
+                        <TabControl.ContentTemplate>
+                            <DataTemplate>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <!-- Line Numbers -->
+                                    <TextBox Grid.Column="0" Text="{Binding LineNumbers, Mode=OneWay}"
+                                             IsReadOnly="True" Background="#F0F0F0" Foreground="Gray"
+                                             FontFamily="Consolas" FontSize="13"
+                                             BorderThickness="0,0,1,0" BorderBrush="LightGray"
+                                             TextAlignment="Right" Padding="4,4,8,4"
+                                             VerticalScrollBarVisibility="Hidden"
+                                             HorizontalScrollBarVisibility="Hidden"
+                                             IsTabStop="False"
+                                             ScrollViewer.CanContentScroll="True"
+                                             x:Name="LineNumberBox"/>
+                                    <!-- Editor TextBox -->
+                                    <TextBox Grid.Column="1"
+                                             Text="{Binding Content, UpdateSourceTrigger=PropertyChanged}"
+                                             AcceptsReturn="True" AcceptsTab="True"
+                                             TextWrapping="NoWrap"
+                                             VerticalScrollBarVisibility="Auto"
+                                             HorizontalScrollBarVisibility="Auto"
+                                             FontFamily="Consolas" FontSize="13"
+                                             Padding="4" BorderThickness="0"
+                                             SpellCheck.IsEnabled="False"
+                                             GotFocus="EditorTextBox_GotFocus"/>
+                                </Grid>
+                            </DataTemplate>
+                        </TabControl.ContentTemplate>
+                    </TabControl>
+
+                    <!-- PDF Splitter (visible only when PDF panel is open) -->
+                    <GridSplitter Grid.Column="1" Width="4" HorizontalAlignment="Center"
+                                  VerticalAlignment="Stretch" Background="LightGray"
+                                  x:Name="PdfSplitter" Visibility="Collapsed"/>
+
+                    <!-- PDF Preview Panel -->
+                    <DockPanel Grid.Column="2" x:Name="PdfPreviewPanel" Visibility="Collapsed">
+                        <DockPanel DockPanel.Dock="Top" Margin="0,0,0,4">
+                            <TextBlock Text="PDF Preview" FontWeight="Bold" FontSize="13"
+                                       VerticalAlignment="Center" Margin="4,0"/>
+                            <Button Content="⟳" ToolTip="Reload PDF" Padding="6,2"
+                                    DockPanel.Dock="Right" HorizontalAlignment="Right"
+                                    Click="ReloadPdf_Click"/>
+                        </DockPanel>
+                        <wv2:WebView2 x:Name="PdfWebView"/>
+                    </DockPanel>
+                </Grid>
+            </Grid>
 
             <GridSplitter Grid.Column="3" Width="4" HorizontalAlignment="Center"
                           VerticalAlignment="Stretch" Background="LightGray"/>
@@ -211,8 +251,14 @@
                             <TextBox DockPanel.Dock="Top"
                                      Text="{Binding ImageGallery.SearchFilter, UpdateSourceTrigger=PropertyChanged}"
                                      Margin="4" Padding="4"/>
-                            <Button DockPanel.Dock="Bottom" Content="Insert Image"
-                                    Command="{Binding InsertImageCommand}" Margin="4" Padding="4,2"/>
+                            <StackPanel DockPanel.Dock="Bottom" Margin="4,2">
+                                <Button Content="Insert Image" Margin="0,0,0,2"
+                                        Command="{Binding InsertImageCommand}" Padding="4,2"/>
+                                <Button Content="+ Import to Project" Margin="0,0,0,2"
+                                        Command="{Binding ImportProjectImageCommand}" Padding="4,2"/>
+                                <Button Content="+ Import to Common" Margin="0,0,0,0"
+                                        Command="{Binding ImportCommonImageCommand}" Padding="4,2"/>
+                            </StackPanel>
                             <ListBox ItemsSource="{Binding ImageGallery.FilteredImages}"
                                      SelectedItem="{Binding ImageGallery.SelectedImage}"
                                      Margin="4">
@@ -267,10 +313,11 @@
         <!-- ===== BOTTOM PANEL: Output / Logs ===== -->
         <DockPanel Grid.Row="3" Margin="4">
             <TextBlock DockPanel.Dock="Top" Text="Output" FontWeight="Bold" Margin="4,0,4,4"/>
-            <TextBox Text="{Binding OutputLog, Mode=OneWay}" IsReadOnly="True"
+            <TextBox x:Name="OutputTextBox" Text="{Binding OutputLog, Mode=OneWay}" IsReadOnly="True"
                      VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
                      TextWrapping="NoWrap" FontFamily="Consolas" FontSize="11"
-                     Background="#1E1E1E" Foreground="#DCDCDC" Padding="4"/>
+                     Background="#1E1E1E" Foreground="#DCDCDC" Padding="4"
+                     TextChanged="OutputTextBox_TextChanged"/>
         </DockPanel>
 
         <!-- ===== STATUS BAR ===== -->

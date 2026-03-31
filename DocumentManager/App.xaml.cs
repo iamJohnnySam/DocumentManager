@@ -14,6 +14,9 @@ public partial class App : Application
 {
     private async void Application_Startup(object sender, StartupEventArgs e)
     {
+        // Prevent WPF from shutting down when early dialogs close before MainWindow exists
+        ShutdownMode = ShutdownMode.OnExplicitShutdown;
+
         var settingsService = new SettingsService();
 
         // ── First-run: ask the user to pick the common root folder ──
@@ -38,6 +41,9 @@ public partial class App : Application
         // Ensure the common root structure exists
         var appSettings = settingsService.Load();
         vm.SetCommonRoot(appSettings.CommonRootPath);
+
+        MainWindow = mainWindow;
+        ShutdownMode = ShutdownMode.OnMainWindowClose;
         mainWindow.Show();
 
         // ── Prompt to create or open a project ──
